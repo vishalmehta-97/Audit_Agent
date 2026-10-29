@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 import src.nodes as nodes
 from src.config import settings
 from src.retriever_interface import BaseRegulatoryRetriever
+from src.llm_clients import LLMClient, SearchFn
 from src.schemas import AuditGraphState
 
 NodeFn = Callable[[dict], dict]
@@ -47,23 +48,28 @@ def route_after_grade(state: dict) -> str:
     return "web_fallback"
 
 
-def _resolve(name: str, override: Optional[NodeFn]) -> NodeFn:
+def _resolve(name: str, override: Optional[NodeFn], client=None) -> NodeFn:
+    """Use the override if given, else the node from src.nodes with the optional client bound.
+    The wrapper takes only `state`, and live clients are created lazily inside the node."""
     if override is not None:
         return override
     fn = getattr(nodes, name, None)
     if fn is None:
         raise NotImplementedError(f"src.nodes.{name} is not implemented yet; pass an override.")
-    return fn
+    if client is None:
+        return fn
+    return lambda state: fn(state, client)
 
 
 def create_audit_graph(retriever: BaseRegulatoryRetriever, *, grader: Optional[NodeFn] = None,
                        rewriter: Optional[NodeFn] = None, web_fallback: Optional[NodeFn] = None,
-                       auditor: Optional[NodeFn] = None, verifier: Optional[NodeFn] = None):
+                       auditor: Optional[NodeFn] = None, verifier: Optional[NodeFn] = None,
+                       llm: Optional[LLMClient] = None, search: Optional[SearchFn] = None):
     """Build and compile the audit graph. Keyword overrides exist so tests can inject fake nodes."""
-    grade_fn = _resolve("grader_node", grader)
-    rewrite_fn = _resolve("rewriter_node", rewriter)
-    fallback_fn = _resolve("web_fallback_node", web_fallback)
-    audit_fn = _resolve("auditor_node", auditor)
+    grade_fn = _resolve("grader_node", grader, llm)
+    rewrite_fn = _resolve("rewriter_node", rewriter, llm)
+    fallback_fn = _resolve("web_fallback_node", web_fallback, search)
+    audit_fn = _resolve("auditor_node", auditor, llm)
     verify_fn = _resolve("verifier_node", verifier)
 
     def retrieve(state: dict) -> dict:

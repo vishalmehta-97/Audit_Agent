@@ -215,6 +215,56 @@ def test_router_ignores_is_grounded_and_doc_count():
     assert route_after_grade(_st(True, grounded=False)) == "audit"
 
 
-def test_default_nodes_fail_clearly_when_not_implemented():
-    with pytest.raises(NotImplementedError):
-        create_audit_graph(MockRegulatoryRetriever([]))
+def test_default_graph_without_key_fails_clearly_not_silently(monkeypatch):
+    monkeypatch.setattr("src.llm_clients.settings.GROQ_API_KEY", "")
+    from src.llm_clients import MissingCredentialError
+    g = create_audit_graph(MockRegulatoryRetriever([LOCAL]))  # builds fine: no live client at build time
+    with pytest.raises(MissingCredentialError):
+        run_audit(g, "P-1", CLAUSE)
+
+
+# --- end-to-end with the REAL nodes, fake LLM and fake search ----------------------------------
+from src.nodes import web_chunk_id
+from tests.fakes import FakeLLM, FakeSearch
+
+WEB_RES = {"title": "Official Rule", "url": "https://www.example.gov/rule", "content": "Providers must keep logs for 90 days."}
+
+
+def _grade(rel):
+    return DocumentGrade(is_relevant=rel, confidence_score=0.9, rationale="fake")
+
+
+def test_e2e_real_nodes_fallback_then_grounded_web_citation():
+    wid = web_chunk_id(WEB_RES["url"], WEB_RES["content"])
+    finding = AuditFinding(policy_clause_id="x", policy_text_excerpt="x", status=ComplianceStatus.NON_COMPLIANT,
+                           severity=RiskSeverity.HIGH, statutory_verbatim_quote=WEB_RES["content"],
+                           evidence_ids=[wid], gap_analysis="30 < 90", remediation_action="Retain 90 days")
+    llm = FakeLLM({"DocumentGrade": [_grade(False), _grade(False), _grade(False), _grade(True)],
+                   "AuditFinding": [finding]}, texts=["customer log retention", "records retained days"])
+    search = FakeSearch([WEB_RES])
+    r = MockRegulatoryRetriever([LOCAL])
+    out = run_audit(create_audit_graph(r, llm=llm, search=search), "P-1", CLAUSE, current_query="logs retention")
+    assert len(r.calls) == 3 and llm.count("text") == 2 and len(search.calls) == 1
+    assert llm.count("DocumentGrade") == 4 and llm.count("AuditFinding") == 1
+    assert out["is_grounded"] is True and out["web_fallback_used"] is True
+    assert out["audit_report"].evidence_ids == [wid]
+    web = [d for d in out["retrieved_docs"] if d.source_type == SourceType.WEB]
+    assert web[0].source_url == WEB_RES["url"] and web[0].page_number is None
+
+
+def test_e2e_real_nodes_no_tavily_key_ends_insufficient(monkeypatch):
+    monkeypatch.setattr("src.nodes.settings.TAVILY_API_KEY", "")
+    llm = FakeLLM({"DocumentGrade": [_grade(False)]}, texts=["records retained", "retained days"])
+    r = MockRegulatoryRetriever([LOCAL])
+    out = run_audit(create_audit_graph(r, llm=llm), "P-1", CLAUSE, current_query="logs retention")
+    assert len(r.calls) == 3 and llm.count("text") == 2 and llm.count("DocumentGrade") == 4
+    assert llm.count("AuditFinding") == 0  # irrelevant grade -> deterministic INSUFFICIENT, no LLM audit
+    assert out["web_fallback_attempted"] and not out["web_fallback_used"]
+    assert out["audit_report"].status == ComplianceStatus.INSUFFICIENT_EVIDENCE
+
+
+def test_e2e_real_nodes_empty_corpus_needs_no_grader_llm(monkeypatch):
+    monkeypatch.setattr("src.nodes.settings.TAVILY_API_KEY", "")
+    llm = FakeLLM({"DocumentGrade": [_grade(True)]}, texts=["a", "b"])
+    out = run_audit(create_audit_graph(MockRegulatoryRetriever([]), llm=llm), "P-1", CLAUSE)
+    assert llm.count("DocumentGrade") == 0 and out["audit_report"].status == ComplianceStatus.INSUFFICIENT_EVIDENCE
