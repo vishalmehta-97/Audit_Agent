@@ -1,0 +1,15 @@
+# NOTE: minimum constraints only; this is NOT a lock file.
+# Only pydantic, pydantic-settings and pytest were verified together so far (see README).
+# The remaining packages are UNVERIFIED: the dependency owner must install, test,
+# and then generate a constraints/lock file.
+pydantic>=2.0
+pydantic-settings>=2.0
+pytest>=7.0
+langgraph
+groq
+pymupdf
+fastembed
+chromadb
+rank-bm25
+tavily-python
+streamlit

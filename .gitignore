@@ -1,18 +1,7 @@
-# Environment variables
 .env
-
-# Virtual environment
 .venv/
-
-# Vector database
 chroma_db/
-
-# Python cache
 __pycache__/
-*.pyc
-
-# Pytest cache
 .pytest_cache/
-
-# Private docs
-private-docs/
+*.pyc
+private_docs/
