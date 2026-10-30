@@ -268,3 +268,14 @@ def test_e2e_real_nodes_empty_corpus_needs_no_grader_llm(monkeypatch):
     llm = FakeLLM({"DocumentGrade": [_grade(True)]}, texts=["a", "b"])
     out = run_audit(create_audit_graph(MockRegulatoryRetriever([]), llm=llm), "P-1", CLAUSE)
     assert llm.count("DocumentGrade") == 0 and out["audit_report"].status == ComplianceStatus.INSUFFICIENT_EVIDENCE
+
+
+def test_stream_audit_yields_real_node_events_and_matches_invoke():
+    from src.graph import stream_audit
+    g, _, order = build([LOCAL], relevant_calls=(1,))
+    events = list(stream_audit(g, "P-1", CLAUSE))
+    assert [n for n, _ in events] == ["retrieve", "grade", "audit", "verify"] == order
+    g2, _, _ = build([LOCAL], relevant_calls=(1,))
+    final = run_audit(g2, "P-1", CLAUSE)
+    last = events[-1][1]
+    assert last["audit_report"] == final["audit_report"] and last["is_grounded"] is final["is_grounded"] is True

@@ -98,3 +98,13 @@ def run_audit(graph, policy_clause_id: str, policy_text: str, current_query: Opt
     """Invoke the compiled graph on one clause. recursion_limit is a safety net, not the bound."""
     return graph.invoke(make_initial_state(policy_clause_id, policy_text, current_query),
                         config={"recursion_limit": 50})
+
+
+def stream_audit(graph, policy_clause_id: str, policy_text: str, current_query: Optional[str] = None):
+    """Yield (node_name, state_snapshot) after each REAL node execution (LangGraph 'updates' stream)."""
+    state = dict(make_initial_state(policy_clause_id, policy_text, current_query))
+    for update in graph.stream(dict(state), config={"recursion_limit": 50}, stream_mode="updates"):
+        for node, delta in update.items():
+            if delta:
+                state.update(delta)
+            yield node, dict(state)
