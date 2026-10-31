@@ -2,6 +2,7 @@
 from langgraph.errors import GraphRecursionError
 
 from src.llm_clients import LLMOutputError, MissingCredentialError
+from src.retriever import EmbeddingModelError, RetrievalIndexError
 from src.report import MSG_INSUFFICIENT, MSG_NOT_VERIFIED, MSG_WEB, build_report_view, safe_error_message
 from src.schemas import (AuditFinding, ComplianceStatus, EvidenceChunk, RiskSeverity, SourceType)
 
@@ -71,3 +72,10 @@ def test_safe_errors_leak_nothing():
         msg = safe_error_message(exc)
         assert "gsk_" not in msg and "Traceback" not in msg and "/home" not in msg
     assert "API key" in safe_error_message(MissingCredentialError())
+
+
+def test_index_and_embedding_errors_have_actionable_safe_messages():
+    idx_msg = safe_error_message(RetrievalIndexError("No index found in C:\\secret\\path. Index documents first"))
+    assert "index" in idx_msg and "ingestion" in idx_msg and "secret" not in idx_msg and "C:" not in idx_msg
+    emb_msg = safe_error_message(EmbeddingModelError("HF download failed at https://x"))
+    assert "embedding model" in emb_msg and "internet" in emb_msg and "https" not in emb_msg

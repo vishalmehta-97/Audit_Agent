@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from langgraph.errors import GraphRecursionError
 
 from src.llm_clients import LLMOutputError, MissingCredentialError
+from src.retriever import EmbeddingModelError, RetrievalIndexError
 from src.schemas import ComplianceStatus, SourceType
 
 DISCLAIMER = ("AuditAgent is an assistive compliance-support prototype, not legal advice. Findings are generated "
@@ -24,6 +25,11 @@ def safe_error_message(exc: BaseException) -> str:
     """User-safe text only: never include exception text, paths or keys (those go to the server log)."""
     if isinstance(exc, MissingCredentialError):
         return "A required API key is not configured. Add it to your local .env file and restart the app."
+    if isinstance(exc, RetrievalIndexError):
+        return ("The document index is missing or needs rebuilding. Ingest your documents first "
+                "(see the README: python -m src.ingestion <pdf> or --rebuild).")
+    if isinstance(exc, EmbeddingModelError):
+        return "The embedding model could not be loaded. The first run needs an internet connection to download it."
     if isinstance(exc, LLMOutputError):
         return "The language model returned an unusable response. Please try again."
     if isinstance(exc, GraphRecursionError):

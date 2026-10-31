@@ -25,6 +25,14 @@ from src.schemas import EvidenceChunk
 
 logger = logging.getLogger(__name__)
 
+
+class RetrievalIndexError(RuntimeError):
+    """The index is missing, partial, stale, or incompatible with the current embedder (see the message)."""
+
+
+class EmbeddingModelError(RuntimeError):
+    """The embedding model could not be loaded (for example: no internet on the first, downloading run)."""
+
 CANDIDATE_MULTIPLIER = 2
 
 _ALNUM = r"[^\W_]+"  # letters/digits in any script, no underscore
@@ -138,7 +146,7 @@ class FastEmbedEmbedder:
                 from fastembed import TextEmbedding
                 self._model = TextEmbedding(model_name=self.model_name)
             except Exception as exc:
-                raise RuntimeError(f"Could not load embedding model {self.model_name!r}. The first use downloads it, "
+                raise EmbeddingModelError(f"Could not load embedding model {self.model_name!r}. The first use downloads it, "
                                    "so check your internet connection and the model name.") from exc
         return self._model
 
@@ -228,6 +236,12 @@ class HybridRetriever(BaseRegulatoryRetriever):
         """Forget cached state; the next call re-validates the files on disk."""
         self._state = None
 
+    def ensure_ready(self) -> "HybridRetriever":
+        """Re-validate the index on disk; raises RetrievalIndexError (with instructions) if it is not usable."""
+        self.refresh()
+        self.count()
+        return self
+
     def count(self) -> int:
         return len(self._load_state()["corpus"])
 
@@ -238,7 +252,7 @@ class HybridRetriever(BaseRegulatoryRetriever):
                 raise ValueError("unsupported manifest version")
             return m
         except (OSError, ValueError) as exc:
-            raise RuntimeError(f"The index manifest {self._manifest_path.name} is unreadable. "
+            raise RetrievalIndexError(f"The index manifest {self._manifest_path.name} is unreadable. "
                                "Call rebuild() or index the documents again.") from exc
 
     def _read_corpus(self) -> Dict[str, EvidenceChunk]:
@@ -248,7 +262,7 @@ class HybridRetriever(BaseRegulatoryRetriever):
                 raise ValueError("unsupported corpus version")
             chunks = [EvidenceChunk.model_validate(d) for d in data["chunks"]]
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            raise RuntimeError(f"The stored corpus {self._corpus_path.name} is unreadable or corrupt; "
+            raise RetrievalIndexError(f"The stored corpus {self._corpus_path.name} is unreadable or corrupt; "
                                "index the documents again.") from exc
         return {c.id: c for c in sorted(chunks, key=lambda c: c.id)}
 
@@ -267,23 +281,23 @@ class HybridRetriever(BaseRegulatoryRetriever):
             return self._state
         has_m, has_c = self._manifest_path.exists(), self._corpus_path.exists()
         if not has_m and not has_c:
-            raise RuntimeError(f"No index found in {self._dir}. Index documents first "
+            raise RetrievalIndexError(f"No index found in {self._dir}. Index documents first "
                                "(HybridRetriever.index_documents, or ingest_pdf).")
         if has_m != has_c:
-            raise RuntimeError("The index is partially initialized (the manifest or the corpus file is missing). "
+            raise RetrievalIndexError("The index is partially initialized (the manifest or the corpus file is missing). "
                                "Call rebuild() if the corpus file exists; otherwise index the documents again.")
         manifest, corpus = self._read_manifest(), self._read_corpus()
         if manifest.get("revision") != corpus_revision(corpus.values()) or manifest.get("count") != len(corpus):
-            raise RuntimeError("The index is stale or was only partly written (manifest and corpus disagree). "
+            raise RetrievalIndexError("The index is stale or was only partly written (manifest and corpus disagree). "
                                "Call rebuild() to regenerate the dense index from the stored corpus.")
         try:
             collection = self._client.get_collection(self._name)
         except Exception as exc:
-            raise RuntimeError("The dense index is missing. Call rebuild() to regenerate it from the stored "
+            raise RetrievalIndexError("The dense index is missing. Call rebuild() to regenerate it from the stored "
                                "corpus.") from exc
         dense_ids = set(collection.get(include=[])["ids"])
         if dense_ids != set(corpus):
-            raise RuntimeError(f"The dense index and the stored corpus differ ({len(dense_ids)} vs {len(corpus)} "
+            raise RetrievalIndexError(f"The dense index and the stored corpus differ ({len(dense_ids)} vs {len(corpus)} "
                                "chunks). Call rebuild().")
         ranker = Bm25Ranker(list(corpus), [tokenize(index_text(c)) for c in corpus.values()])
         self._state = {"manifest": manifest, "corpus": corpus, "collection": collection, "ranker": ranker}
@@ -341,7 +355,7 @@ class HybridRetriever(BaseRegulatoryRetriever):
         vectors = self._embed_texts([index_text(c) for c in changed])  # a failure here changes nothing
         model, dim = self._model_name(), len(vectors[0])
         if old_manifest and (old_manifest["embedding_model"] != model or old_manifest["embedding_dim"] != dim):
-            raise RuntimeError(f"The index was built with embedding model {old_manifest['embedding_model']!r} "
+            raise RetrievalIndexError(f"The index was built with embedding model {old_manifest['embedding_model']!r} "
                                f"({old_manifest['embedding_dim']} dims) but the current embedder is {model!r} "
                                f"({dim} dims). Use reindex(...) or rebuild() to rebuild with the new model.")
         merged = dict(sorted({**existing, **{c.id: c for c in changed}}.items()))
@@ -360,10 +374,10 @@ class HybridRetriever(BaseRegulatoryRetriever):
     def rebuild(self) -> None:
         """Deterministic recovery: regenerate the dense index and manifest from the stored canonical corpus."""
         if not self._corpus_path.exists():
-            raise RuntimeError(f"No stored corpus in {self._dir}; nothing to rebuild from. Index documents again.")
+            raise RetrievalIndexError(f"No stored corpus in {self._dir}; nothing to rebuild from. Index documents again.")
         corpus = self._read_corpus()
         if not corpus:
-            raise RuntimeError("The stored corpus is empty; nothing to rebuild.")
+            raise RetrievalIndexError("The stored corpus is empty; nothing to rebuild.")
         chunks = list(corpus.values())
         vectors = self._embed_texts([index_text(c) for c in chunks])
         self._state = None
@@ -374,7 +388,7 @@ class HybridRetriever(BaseRegulatoryRetriever):
     # ------------------------------------------------------------------ retrieval
     def _check_embedder(self, manifest: Dict[str, Any]) -> None:
         if manifest["embedding_model"] != self._model_name():
-            raise RuntimeError(f"The index was built with embedding model {manifest['embedding_model']!r} but the "
+            raise RetrievalIndexError(f"The index was built with embedding model {manifest['embedding_model']!r} but the "
                                f"current embedder is {self._model_name()!r}. Call rebuild() to re-embed.")
 
     def _dense_rank(self, query: str, n: int) -> List[str]:
@@ -382,7 +396,7 @@ class HybridRetriever(BaseRegulatoryRetriever):
         self._check_embedder(state["manifest"])
         q = self._embedder.embed_query(query)
         if len(q) != state["manifest"]["embedding_dim"]:
-            raise RuntimeError(f"Query embedding has {len(q)} dims but the index uses "
+            raise RetrievalIndexError(f"Query embedding has {len(q)} dims but the index uses "
                                f"{state['manifest']['embedding_dim']}. Call rebuild().")
         res = state["collection"].query(query_embeddings=[q], n_results=n, include=["distances"])
         pairs = sorted(zip(res["distances"][0], res["ids"][0]))  # (distance, id): deterministic ties
