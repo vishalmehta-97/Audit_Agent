@@ -79,3 +79,29 @@ def test_index_and_embedding_errors_have_actionable_safe_messages():
     assert "index" in idx_msg and "ingestion" in idx_msg and "secret" not in idx_msg and "C:" not in idx_msg
     emb_msg = safe_error_message(EmbeddingModelError("HF download failed at https://x"))
     assert "embedding model" in emb_msg and "internet" in emb_msg and "https" not in emb_msg
+
+
+def _groq_status_error(cls_name, status):
+    import groq
+    import httpx
+    resp = httpx.Response(status, request=httpx.Request("POST", "https://api.groq.com/x"),
+                          json={"error": {"message": "SECRET-DETAIL gsk_abc"}})
+    return getattr(groq, cls_name)("SECRET-DETAIL gsk_abc", response=resp, body=None)
+
+
+def test_groq_failures_get_specific_safe_messages():
+    import groq
+    import httpx
+    cases = [("AuthenticationError", 401, "rejected the API key"), ("NotFoundError", 404, "GROQ_MODEL_NAME"),
+             ("RateLimitError", 429, "rate limit"), ("BadRequestError", 400, "JSON output"),
+             ("InternalServerError", 500, "temporary problem")]
+    for cls, status, expected in cases:
+        msg = safe_error_message(_groq_status_error(cls, status))
+        assert expected in msg and "SECRET" not in msg and "gsk_" not in msg and "Traceback" not in msg
+    conn = groq.APIConnectionError(request=httpx.Request("POST", "https://api.groq.com/x"))
+    assert "Could not reach the model provider" in safe_error_message(conn)
+
+
+def test_unrecognised_errors_still_get_the_generic_message():
+    msg = safe_error_message(ValueError("whatever gsk_x"))
+    assert "Something went wrong" in msg and "gsk_" not in msg

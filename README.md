@@ -71,7 +71,7 @@ Corrupt or password-protected PDFs are reported and skipped, never silently inge
 |---|---|---|
 | `GROQ_API_KEY` | empty | needed only for live runs |
 | `TAVILY_API_KEY` | empty | optional web fallback |
-| `GROQ_MODEL_NAME` | `llama-3.3-70b-versatile` | verify it is still available before live use |
+| `GROQ_MODEL_NAME` | `openai/gpt-oss-120b` | Groq's catalog changes; see Troubleshooting to list the models your account can use |
 | `CHROMA_PERSIST_DIR` | `./chroma_db` | index folder |
 | `EMBEDDING_MODEL_NAME` | `BAAI/bge-small-en-v1.5` | changing it requires `--rebuild` |
 | `RETRIEVAL_TOP_K` / `RRF_K` | 4 / 60 | |
@@ -97,15 +97,22 @@ tests/                         offline tests; fakes for LLM, search and embedder
 | Area | State |
 |---|---|
 | Offline test suite, mutation-style spot checks of key guards | passing (see the PR for the exact run) |
-| Live Groq calls (JSON mode, model name) | **not verified** |
+| Live Groq calls | verified on one clause with `openai/gpt-oss-120b` (JSON mode worked); other models and clauses not tested; the previous default `llama-3.3-70b-versatile` was rejected with 404 on the author's account |
 | Live Tavily search | **not verified** (API signature was checked offline only) |
-| Real FastEmbed model download and embeddings | **not verified** (tests use a fake embedder) |
+| Real FastEmbed model download, ChromaDB and ingestion on Windows | verified once end to end (index of 4 chunks, live audit cited the right chunk); automated tests still use a fake embedder |
 | Python 3.11 | **not verified** (developed on 3.13.7) |
 | Dependency lock file | **not created yet** |
 | Streamlit UI | headless `AppTest` only; check the layout in a browser |
 
 ## Troubleshooting
 
+* **"The model provider could not find the configured model" (404).** List what your account can use, then set
+  `GROQ_MODEL_NAME` in `.env` to one of the chat models (not whisper, tts or guard models):
+  `python -c "from groq import Groq; from src.config import settings; print(chr(10).join(sorted(m.id for m in Groq(api_key=settings.GROQ_API_KEY).models.list().data)))"`
+* **"The model provider rejected the API key" (401).** Check `.env`: exactly `GROQ_API_KEY=gsk_...`, no quotes or spaces,
+  and no second `GROQ_API_KEY` line (when a name appears twice, the later line wins). Restart the app after any `.env` change.
+* **Keep `.env` to one line per setting, and never type commands into it.** Run the app with
+  `streamlit run app.py --server.address localhost` (keeps it off your network; it has no login).
 * **"An Application Control policy has blocked this file" when importing numpy (Windows).** Windows (Smart App
   Control or a managed policy) blocked a compiled file. Try `Unblock-File` on the venv's numpy files, or
   `pip install --force-reinstall --no-cache-dir numpy`; on a managed machine, ask IT or use WSL2.

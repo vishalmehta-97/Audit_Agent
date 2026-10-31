@@ -8,8 +8,8 @@ class Settings(BaseSettings):
 
     GROQ_API_KEY: str = ""
     TAVILY_API_KEY: str = ""
-    # Default may be outdated: verify current availability before live use.
-    GROQ_MODEL_NAME: str = "llama-3.3-70b-versatile"
+    # Groq's model catalog changes often: list your account's models (see README) and override in .env if needed.
+    GROQ_MODEL_NAME: str = "openai/gpt-oss-120b"
     CHROMA_PERSIST_DIR: str = "./chroma_db"
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-small-en-v1.5"
     RETRIEVAL_TOP_K: int = Field(default=4, ge=1, le=20)
