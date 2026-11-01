@@ -105,6 +105,11 @@ tests/                         offline tests; fakes for LLM, search and embedder
 | Dependency pins (`constraints.txt`) | created from the author's working environment; not tested on a second machine |
 | Streamlit UI | headless `AppTest` only; check the layout in a browser |
 
+Live model output is **not deterministic**: in the author's repeat runs the same clause was once graded differently
+(`python evaluate.py --live --case compliant --verbose` shows the graph path and the model's own rationale).
+The bounded retry/fallback logic and the verifier still hold either way, and an unsupported answer ends as
+`INSUFFICIENT_EVIDENCE`, never as a false pass. Treat every result as a draft for human review.
+
 ## Troubleshooting
 
 * **"The model provider could not find the configured model" (404).** List what your account can use, then set
