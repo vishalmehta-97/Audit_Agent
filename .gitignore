@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 *.pyc
 private_docs/
+data/synthetic_corpus/*.pdf

@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from langgraph.errors import GraphRecursionError
 
 from src.llm_clients import LLMOutputError, MissingCredentialError
+from src.retriever import EmbeddingModelError, RetrievalIndexError
 from src.schemas import ComplianceStatus, SourceType
 
 DISCLAIMER = ("AuditAgent is an assistive compliance-support prototype, not legal advice. Findings are generated "
@@ -20,10 +21,41 @@ MSG_WEB = ("Some cited evidence comes from a web search. Web results are seconda
 MSG_WEB_EMPTY = "A web search was attempted but returned no usable results."
 
 
+def _provider_error_message(exc: BaseException) -> str:
+    """Fixed, safe text for failures raised by the Groq client (matched by module/class so groq stays optional)."""
+    if not (type(exc).__module__ or "").startswith("groq"):
+        return ""
+    name, code = type(exc).__name__, getattr(exc, "status_code", None)
+    if name in ("APIConnectionError", "APITimeoutError"):
+        return "Could not reach the model provider. Check your internet connection and try again."
+    if code in (401, 403):
+        return ("The model provider rejected the API key. Check GROQ_API_KEY in your .env file (no quotes or "
+                "spaces; create a fresh key if needed) and restart the app.")
+    if code == 404:
+        return ("The model provider could not find the configured model. Set GROQ_MODEL_NAME in your .env file "
+                "to a model listed in the Groq console and restart the app.")
+    if code == 429:
+        return "The model provider's rate limit was reached. Wait a minute and try again."
+    if code in (400, 422):
+        return ("The model provider rejected the request (for example, the model may not support JSON output). "
+                "Try another GROQ_MODEL_NAME.")
+    if isinstance(code, int) and code >= 500:
+        return "The model provider had a temporary problem. Try again shortly."
+    return ""
+
+
 def safe_error_message(exc: BaseException) -> str:
     """User-safe text only: never include exception text, paths or keys (those go to the server log)."""
     if isinstance(exc, MissingCredentialError):
         return "A required API key is not configured. Add it to your local .env file and restart the app."
+    if isinstance(exc, RetrievalIndexError):
+        return ("The document index is missing or needs rebuilding. Ingest your documents first "
+                "(see the README: python -m src.ingestion <pdf> or --rebuild).")
+    if isinstance(exc, EmbeddingModelError):
+        return "The embedding model could not be loaded. The first run needs an internet connection to download it."
+    provider = _provider_error_message(exc)
+    if provider:
+        return provider
     if isinstance(exc, LLMOutputError):
         return "The language model returned an unusable response. Please try again."
     if isinstance(exc, GraphRecursionError):

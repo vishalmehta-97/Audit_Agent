@@ -7,6 +7,7 @@ import evaluate
 from src.config import settings
 from src.graph import create_audit_graph, stream_audit
 from src.llm_clients import MissingCredentialError
+from src.retriever import HybridRetriever, RetrievalIndexError
 from src.report import DISCLAIMER, build_report_view, safe_error_message
 from tests.mocks.mock_retriever import MockRegulatoryRetriever
 
@@ -15,14 +16,19 @@ LIVE, DEMO = "Live model", "Offline scripted demo"
 CASES = {c.title: c for c in evaluate.CASES}
 
 
+@st.cache_resource(show_spinner=False)
+def _cached_retriever() -> HybridRetriever:
+    """One retriever (and one loaded embedding model) per app process; construction is cheap and lazy."""
+    return HybridRetriever()
+
+
 def get_retriever():
-    """HybridRetriever when Developer A's module is ready; otherwise the synthetic demo corpus (flagged)."""
+    """(retriever, kind, note). Uses the real index when one is ready, otherwise the flagged synthetic demo corpus."""
     try:
-        from src.retriever import HybridRetriever
-        return HybridRetriever(), "hybrid"  # NOTE: confirm constructor arguments at integration time
-    except Exception as exc:
-        logger.warning("HybridRetriever unavailable (%s); using the synthetic demo corpus.", type(exc).__name__)
-        return MockRegulatoryRetriever(evaluate.SYNTHETIC_CORPUS), "demo"
+        return _cached_retriever().ensure_ready(), "hybrid", ""
+    except RetrievalIndexError as exc:
+        logger.warning("No usable index (%s); falling back to the synthetic demo corpus.", exc)
+        return MockRegulatoryRetriever(evaluate.SYNTHETIC_CORPUS), "demo", safe_error_message(exc)
 
 
 def apply_sample():
@@ -79,10 +85,15 @@ def run(clause_id: str, text: str, mode: str) -> None:
         if not settings.GROQ_API_KEY:
             st.error(safe_error_message(MissingCredentialError()))
             return
-        retriever, kind = get_retriever()
+        try:
+            retriever, kind, note = get_retriever()
+            graph = create_audit_graph(retriever)
+        except Exception as exc:
+            logger.exception("could not prepare the audit")
+            st.error(safe_error_message(exc))
+            return
         if kind == "demo":
-            st.warning("Using the built-in SYNTHETIC demo corpus (not real law); the real retriever is not available.")
-        graph = create_audit_graph(retriever)
+            st.warning(f"Using the built-in SYNTHETIC demo corpus (not real law). {note}")
     final = None
     try:
         with st.status("Running audit...", expanded=True) as status:
