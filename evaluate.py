@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from src.graph import create_audit_graph, run_audit
+from src.graph import create_audit_graph, stream_audit
 from src.llm_clients import MissingCredentialError, make_default_llm
 from src.schemas import (AuditFinding, ComplianceStatus, DocumentGrade, EvidenceChunk, RiskSeverity)
 from tests.fakes import FakeLLM, FakeSearch
@@ -107,9 +107,17 @@ def _build_live_graph(llm, web: bool):
 def run_case(case: EvalCase, graph) -> Dict[str, Any]:
     t0 = time.perf_counter()
     row: Dict[str, Any] = {"id": case.id, "title": case.title, "kind": case.kind, "expected": case.expected.value,
-                           "actual": None, "correct": False, "grounded": False, "error": None}
+                           "actual": None, "correct": False, "grounded": False, "error": None,
+                           "path": [], "grade_rationale": None, "gap_analysis": None}
     try:
-        out = run_audit(graph, case.id, case.clause_text, case.query)
+        out, path = {}, []
+        for node, snapshot in stream_audit(graph, case.id, case.clause_text, case.query):
+            path.append(node)
+            out = snapshot
+        row["path"] = path
+        grade = out.get("document_grade")
+        row["grade_rationale"] = grade.rationale if grade else None  # the LAST grading
+        row["gap_analysis"] = out["audit_report"].gap_analysis
         row["actual"] = out["audit_report"].status.value
         row["grounded"] = bool(out["is_grounded"])
         row["correct"] = row["actual"] == row["expected"]
@@ -121,15 +129,25 @@ def run_case(case: EvalCase, graph) -> Dict[str, Any]:
     return row
 
 
-def run_evaluation(live: bool = False, web: bool = False) -> Dict[str, Any]:
+def cases_for_mode(live: bool) -> List[EvalCase]:
+    """The verifier probe depends on the scripted fake model citing a made-up quote, so live runs skip it
+    (a real model would rightly answer NON_COMPLIANT and be scored wrong)."""
+    return [c for c in CASES if not (live and c.kind == "verifier-check")]
+
+
+def run_evaluation(live: bool = False, web: bool = False, only: Optional[List[str]] = None) -> Dict[str, Any]:
     llm = make_default_llm() if live else None  # raises MissingCredentialError if no key
     rows = []
-    for case in CASES:
+    cases = [c for c in cases_for_mode(live) if only is None or c.id in only]
+    if not cases:
+        raise ValueError("no cases selected")
+    for case in cases:
         graph = _build_live_graph(llm, web) if live else build_offline_graph(case)
         rows.append(run_case(case, graph))
     done = [r for r in rows if r["error"] is None]
     return {
         "mode": "LIVE" if live else "OFFLINE_SCRIPTED", "web_fallback_live": bool(live and web), "cases": rows,
+        "skipped": [c.id for c in CASES if c not in cases_for_mode(live)],
         "total": len(rows), "accuracy": sum(r["correct"] for r in rows) / len(rows),
         "grounding_rate": (sum(r["grounded"] for r in done) / len(done)) if done else 0.0,
         "avg_latency_ms": (sum(r["latency_ms"] for r in rows) / len(rows)),
@@ -138,7 +156,7 @@ def run_evaluation(live: bool = False, web: bool = False) -> Dict[str, Any]:
     }
 
 
-def format_report(s: Dict[str, Any]) -> str:
+def format_report(s: Dict[str, Any], verbose: bool = False) -> str:
     if s["mode"] == "LIVE":
         banner = "LIVE RUN (real model; synthetic cases and corpus; NOT a measure of legal accuracy)"
     else:
@@ -148,6 +166,13 @@ def format_report(s: Dict[str, Any]) -> str:
     for r in s["cases"]:
         lines.append(f"{r['id']:<22}{r['expected']:<24}{str(r['actual']):<24}{('yes' if r['correct'] else 'NO'):<5}"
                      f"{('yes' if r['grounded'] else 'no'):<10}{r['latency_ms']:>8}")
+    if verbose:
+        for r in s["cases"]:
+            lines += ["", f"[{r['id']}] path: {' > '.join(r['path']) or '(none)'}",
+                      f"  last grade rationale: {(r['grade_rationale'] or '-')[:400]}",
+                      f"  gap analysis: {(r['gap_analysis'] or '-')[:500]}"]
+    if s.get("skipped"):
+        lines += ["", f"skipped in live mode (scripted-only checks): {', '.join(s['skipped'])}"]
     lines += ["", f"classification accuracy vs synthetic ground truth: {s['accuracy']:.0%} ({round(s['accuracy'] * s['total'])}/{s['total']})",
               f"citation grounding rate (completed cases): {s['grounding_rate']:.0%}",
               f"average latency per clause: {s['avg_latency_ms']:.1f} ms",
@@ -161,13 +186,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--live", action="store_true", help="use the real LLM (opt-in)")
     ap.add_argument("--web", action="store_true", help="with --live: also allow live web fallback")
     ap.add_argument("--json", metavar="PATH", help="also write results as JSON")
+    ap.add_argument("--case", choices=[c.id for c in CASES], help="run only this case")
+    ap.add_argument("--verbose", action="store_true", help="show each case's graph path, grade rationale and gap analysis")
     args = ap.parse_args(argv)
+    if args.live and args.case and args.case not in [c.id for c in cases_for_mode(True)]:
+        print(f"The case {args.case!r} is scripted-only and cannot run in live mode.")
+        return 2
     try:
-        summary = run_evaluation(live=args.live, web=args.web)
+        summary = run_evaluation(live=args.live, web=args.web, only=[args.case] if args.case else None)
     except MissingCredentialError:
         print("Live evaluation needs GROQ_API_KEY in your .env file. Nothing was run.")
         return 2
-    print(format_report(summary))
+    print(format_report(summary, verbose=args.verbose))
     if args.json:
         with open(args.json, "w", encoding="utf-8") as fh:
             json.dump(summary, fh, indent=2)

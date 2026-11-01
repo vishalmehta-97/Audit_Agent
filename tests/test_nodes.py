@@ -278,3 +278,12 @@ def test_auditor_without_key_fails_clearly(monkeypatch):
     monkeypatch.setattr("src.llm_clients.settings.GROQ_API_KEY", "")
     with pytest.raises(MissingCredentialError):
         auditor_node(st(document_grade=grade(True)))
+
+
+def test_grader_prompt_defines_roles_and_does_not_demand_proof_of_implementation():
+    from src.nodes import GRADER_SYSTEM
+    for needle in ("EVIDENCE is regulatory text", "POLICY CLAUSE is the organization's own statement",
+                   "Never require the evidence to prove", "directly addresses", "is_relevant=false",
+                   "UNTRUSTED", "Do not invent rules"):
+        assert needle in GRADER_SYSTEM
+    assert "insufficient evidence must be graded not relevant" not in GRADER_SYSTEM  # the wording that misled the model
