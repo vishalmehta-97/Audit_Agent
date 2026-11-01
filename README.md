@@ -30,10 +30,11 @@ Requirements: Python 3.11+ (developed on 3.13.7 on Windows; the contract says 3.
 ```
 python -m venv .venv
 .venv\Scripts\Activate.ps1          # Windows PowerShell   (Mac/Linux: source .venv/bin/activate)
-pip install -r requirements.txt
+pip install -r requirements.txt -c constraints.txt   # constraints.txt pins the versions the tests were run with
 copy .env.example .env              # Mac/Linux: cp .env.example .env   then edit .env
 ```
-`requirements.txt` has minimum constraints only (not a lock file). Never commit `.env`, keys, `chroma_db/`,
+`requirements.txt` lists the packages with minimum constraints; `constraints.txt` pins the exact versions the author's tests passed with
+(captured on Windows, Python 3.13.7, so another OS or Python version may need to loosen a pin). Never commit `.env`, keys, `chroma_db/`,
 or private documents.
 
 ## Run the tests (offline: no keys, no internet)
@@ -101,7 +102,7 @@ tests/                         offline tests; fakes for LLM, search and embedder
 | Live Tavily search | **not verified** (API signature was checked offline only) |
 | Real FastEmbed model download, ChromaDB and ingestion on Windows | verified once end to end (index of 4 chunks, live audit cited the right chunk); automated tests still use a fake embedder |
 | Python 3.11 | **not verified** (developed on 3.13.7) |
-| Dependency lock file | **not created yet** |
+| Dependency pins (`constraints.txt`) | created from the author's working environment; not tested on a second machine |
 | Streamlit UI | headless `AppTest` only; check the layout in a browser |
 
 ## Troubleshooting
